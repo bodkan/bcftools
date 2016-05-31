@@ -26,8 +26,10 @@ DEALINGS IN THE SOFTWARE.  */
 #include <stdlib.h>
 #include <htslib/vcf.h>
 #include <htslib/vcfutils.h>
+#include <htslib/khash_str2int.h>
 #include <inttypes.h>
 #include <getopt.h>
+#include "bcftools.h"
 
 bcf_hdr_t *in_hdr, *out_hdr;
 int32_t *gts = NULL, mgts = 0;
@@ -35,6 +37,9 @@ int *arr = NULL, marr = 0;
 uint64_t nchanged = 0;
 int new_gt = bcf_gt_unphased(0);
 int use_major = 0;
+
+char **user_samples = NULL;
+void *hdr_samples = NULL;
 
 const char *about(void)
 {
@@ -53,6 +58,7 @@ const char *usage(void)
         "Plugin options:\n"
         "   -p, --phased       Set to \"0|0\" \n"
         "   -m, --major        Set to major allele \n"
+        "   -s, --samples      Names of samples to process \n"
         "\n"
         "Example:\n"
         "   bcftools +missing2ref in.vcf -- -p\n"
@@ -63,19 +69,23 @@ const char *usage(void)
 
 int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 {
+    int i;
+    char *samples = NULL;
     int c;
     static struct option loptions[] =
     {
         {"phased",0,0,'p'},
         {"major",0,0,'m'},
+        {"samples",required_argument,0,'s'},
         {0,0,0,0}
     };
-    while ((c = getopt_long(argc, argv, "mp?h",loptions,NULL)) >= 0)
+    while ((c = getopt_long(argc, argv, "mps:?h",loptions,NULL)) >= 0)
     {
         switch (c) 
         {
             case 'p': new_gt = bcf_gt_phased(0); break;
             case 'm': use_major = 1; break;
+            case 's': samples = optarg; break;
             case 'h':
             case '?':
             default: fprintf(stderr,"%s", usage()); exit(1); break;
@@ -83,6 +93,37 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     }
     in_hdr  = in;
     out_hdr = out;
+
+    // load list of samples present in the VCF (specified in the header)
+    hdr_samples = khash_str2int_init();
+    for (i=0; i < bcf_hdr_nsamples(in_hdr); i++) {
+        khash_str2int_inc(hdr_samples, bcf_hdr_int2id(in_hdr,BCF_DT_SAMPLE,i));
+    }
+
+    // parse the comma-separated list of samples for processing
+    int user_nsamples;
+    user_samples = hts_readlist(samples, 0, &user_nsamples);
+
+    // check if alle the specified samples exist in the VCF header
+    for (i = 0; i < user_nsamples; ++i) {
+        if (!khash_str2int_has_key(hdr_samples, user_samples[i])) {
+            error("One of the samples is not present in the header: %s \n",
+                  user_samples[i]);
+        }
+    }
+
+    fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
+    fprintf(stderr, "Samples present in the VCF:\n");
+    for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
+        fprintf(stderr, "%5d %s\n", i, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i));
+    }
+
+    fprintf(stderr, "\nNumber of samples specified by the user: %d\n", user_nsamples);
+    fprintf(stderr, "Samples specified by the user:\n");
+    for (i = 0; i < 2; i++) {
+        fprintf(stderr, "%5d %s\n", i, user_samples[i]);
+    }
+
     return 0;
 }
 
@@ -139,6 +180,7 @@ void destroy(void)
     free(arr);
     fprintf(stderr,"Filled %"PRId64" REF alleles\n", nchanged);
     free(gts);
+    free(user_samples);
 }
 
 
