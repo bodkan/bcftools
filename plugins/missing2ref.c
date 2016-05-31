@@ -26,7 +26,6 @@ DEALINGS IN THE SOFTWARE.  */
 #include <stdlib.h>
 #include <htslib/vcf.h>
 #include <htslib/vcfutils.h>
-#include <htslib/khash_str2int.h>
 #include <inttypes.h>
 #include <getopt.h>
 #include "bcftools.h"
