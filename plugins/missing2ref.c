@@ -38,11 +38,10 @@ uint64_t nchanged = 0;
 int new_gt = bcf_gt_unphased(0);
 int use_major = 0;
 
-void *hdr_samples = NULL;
-void *usr_samples = NULL;
-int process_all = 1;      // process all samples in the VCF?
-
-int *samples_mask = NULL;
+// binary mask array (number of elements = number of samples in the VCF)
+//    0 - sample will not be processed
+//    1 - sample will be processed
+int *samples_to_process = NULL;
 
 const char *about(void)
 {
@@ -73,7 +72,11 @@ const char *usage(void)
 int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 {
     int i;
-    char *samples = NULL;
+
+    // process all samples in the VCF by default
+    int process_all = 1;
+
+    char *samples_str = NULL;
     int c;
     static struct option loptions[] =
     {
@@ -82,14 +85,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
         {"samples",required_argument,0,'s'},
         {0,0,0,0}
     };
-    while ((c = getopt_long(argc, argv, "mps:?h",loptions,NULL)) >= 0)
+
+    while ((c = getopt_long(argc, argv, "mps:?h", loptions, NULL)) >= 0)
     {
         switch (c) 
         {
             case 'p': new_gt = bcf_gt_phased(0); break;
             case 'm': use_major = 1; break;
             case 's':
-                samples = optarg;
+                samples_str = optarg;
                 process_all = 0;
                 break;
             case 'h':
@@ -100,59 +104,35 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     in_hdr  = in;
     out_hdr = out;
 
-    // create a binary mask of sample names:
-    //     0 - sample will NOT be processed
-    //     1 - sample will be processed
-    samples_mask = malloc (sizeof (int) * bcf_hdr_nsamples(in_hdr));
+    samples_to_process = (int *) malloc (sizeof (int) * bcf_hdr_nsamples(in_hdr));
 
     if (process_all) {
         for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++)
-            samples_mask[i] = 1;
+            samples_to_process[i] = 1;
     } else {
-        // load list of samples present in the VCF (specified in the header)
-        hdr_samples = khash_str2int_init();
-        for (i=0; i < bcf_hdr_nsamples(in_hdr); i++) {
-            khash_str2int_inc(hdr_samples, bcf_hdr_int2id(in_hdr,BCF_DT_SAMPLE,i));
-        }
+        // parse the comma-separated list of samples
+        int nsamples;
+        char **samples = hts_readlist(samples_str, 0, &nsamples);
 
-        // parse the comma-separated list of samples for processing
-        int user_nsamples;
-        char **user_samples = hts_readlist(samples, 0, &user_nsamples);
-
-        // check if alle the specified samples exist in the VCF header
-        for (i = 0; i < user_nsamples; ++i) {
-            if (!khash_str2int_has_key(hdr_samples, user_samples[i])) {
+        // check if all of the specified samples exist in the VCF header
+        for (i = 0; i < nsamples; ++i) {
+            if (bcf_hdr_id2int(in_hdr, BCF_DT_SAMPLE, samples[i]) == -1) {
                 error("One of the samples is not present in the header: %s \n",
-                      user_samples[i]);
+                      samples[i]);
             }
         }
 
-        // convert the list of user-specified samples to a hash table
-        usr_samples = khash_str2int_init();
-        for (i=0; i < user_nsamples; i++) {
-            khash_str2int_inc(usr_samples, user_samples[i]);
-        }
-
-        // assign 0 to samples that were not specified by the user
-        samples_mask = malloc (sizeof (int) * bcf_hdr_nsamples(in_hdr));
+        // initialize the sample mask
         for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
-            char *s = bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE,i);
-            samples_mask[i] = khash_str2int_has_key(usr_samples, s);
+            samples_to_process[i] = 0;
+        }
+        // update the mask for samples which will be processed
+        for (i=0; i < nsamples; i++) {
+            int pos = bcf_hdr_id2int(in_hdr, BCF_DT_SAMPLE, samples[i]);
+            samples_to_process[pos] = 1;
         }
 
-        fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
-        fprintf(stderr, "Samples present in the VCF:\n");
-        for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
-            fprintf(stderr, "%5d %s\n", i, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i));
-        }
-
-        fprintf(stderr, "\nNumber of samples specified by the user: %d\n", user_nsamples);
-        fprintf(stderr, "Samples specified by the user:\n");
-        for (i = 0; i < user_nsamples; i++) {
-            fprintf(stderr, "%5d %s\n", i, user_samples[i]);
-        }
-
-        free(user_samples);
+        free(samples);
     }
 
     return 0;
@@ -192,11 +172,9 @@ bcf1_t *process(bcf1_t *rec)
             new_gt = bcf_gt_unphased(majorAllele);
     }
 
-    // replace gts
-    for (i=0; i<ngts; i++)
-    {
-        if ( gts[i]==bcf_gt_missing && samples_mask[i / 2])
-        {
+    // replace GTs of those samples that are supposed to be processed
+    for (i = 0; i < ngts; i++) {
+        if (gts[i] == bcf_gt_missing && samples_to_process[i / 2]) {
             gts[i] = new_gt;
             changed++;
         }
@@ -211,6 +189,7 @@ void destroy(void)
     free(arr);
     fprintf(stderr,"Filled %"PRId64" REF alleles\n", nchanged);
     free(gts);
+    free(samples_to_process);
 }
 
 
