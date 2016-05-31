@@ -38,8 +38,8 @@ uint64_t nchanged = 0;
 int new_gt = bcf_gt_unphased(0);
 int use_major = 0;
 
-char **user_samples = NULL;
 void *hdr_samples = NULL;
+void *usr_samples = NULL;
 
 const char *about(void)
 {
@@ -102,7 +102,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 
     // parse the comma-separated list of samples for processing
     int user_nsamples;
-    user_samples = hts_readlist(samples, 0, &user_nsamples);
+    char **user_samples = hts_readlist(samples, 0, &user_nsamples);
 
     // check if alle the specified samples exist in the VCF header
     for (i = 0; i < user_nsamples; ++i) {
@@ -110,6 +110,12 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
             error("One of the samples is not present in the header: %s \n",
                   user_samples[i]);
         }
+    }
+
+    // convert the list of user-specified samples to a hash table
+    usr_samples = khash_str2int_init();
+    for (i=0; i < user_nsamples; i++) {
+        khash_str2int_inc(usr_samples, user_samples[i]);
     }
 
     fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
@@ -120,9 +126,11 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 
     fprintf(stderr, "\nNumber of samples specified by the user: %d\n", user_nsamples);
     fprintf(stderr, "Samples specified by the user:\n");
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < user_nsamples; i++) {
         fprintf(stderr, "%5d %s\n", i, user_samples[i]);
     }
+
+    free(user_samples);
 
     return 0;
 }
@@ -164,7 +172,10 @@ bcf1_t *process(bcf1_t *rec)
     // replace gts
     for (i=0; i<ngts; i++)
     {
-        if ( gts[i]==bcf_gt_missing )
+        char *s = bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i / 2);
+//        fprintf(stderr, "%d/%s/%d ", i / 2, s, khash_str2int_has_key(usr_samples, s));
+//        fprintf(stderr, "%d ", gts[i]);
+        if ( gts[i]==bcf_gt_missing && khash_str2int_has_key(usr_samples, s))
         {
             gts[i] = new_gt;
             changed++;
@@ -180,7 +191,6 @@ void destroy(void)
     free(arr);
     fprintf(stderr,"Filled %"PRId64" REF alleles\n", nchanged);
     free(gts);
-    free(user_samples);
 }
 
 
