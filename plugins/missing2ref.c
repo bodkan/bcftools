@@ -57,9 +57,9 @@ const char *usage(void)
         "   run \"bcftools plugin\" for a list of common options\n"
         "\n"
         "Plugin options:\n"
-        "   -p, --phased       Set to \"0|0\" \n"
-        "   -m, --major        Set to major allele \n"
-        "   -s, --samples      Names of samples to process \n"
+        "   -p, --phased     Set to \"0|0\" \n"
+        "   -m, --major      Set to major allele \n"
+        "   -s, --samples    Names of samples to process (or not, if prefixed with ^)\n"
         "\n"
         "Example:\n"
         "   bcftools +missing2ref in.vcf -- -p\n"
@@ -109,9 +109,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
         for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++)
             samples_to_process[i] = 1;
     } else {
+        int exclude = samples_str[0] == '^';
+
         // parse the comma-separated list of samples
         int nsamples;
-        char **samples = hts_readlist(samples_str, 0, &nsamples);
+        char **samples = hts_readlist(exclude ? &samples_str[1] : samples_str, 0, &nsamples);
+
+        for (i = 0; i < nsamples; i++) {
+            fprintf(stderr, "%s\n", samples[i]);
+        }
 
         // check if all of the specified samples exist in the VCF header
         for (i = 0; i < nsamples; ++i) {
@@ -123,12 +129,12 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 
         // initialize the sample mask
         for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
-            samples_to_process[i] = 0;
+            samples_to_process[i] = exclude ? 1 : 0;
         }
         // update the mask for samples which will be processed
         for (i=0; i < nsamples; i++) {
             int pos = bcf_hdr_id2int(in_hdr, BCF_DT_SAMPLE, samples[i]);
-            samples_to_process[pos] = 1;
+            samples_to_process[pos] = exclude ? 0 : 1;
         }
 
         free(samples);
