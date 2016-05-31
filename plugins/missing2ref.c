@@ -40,6 +40,7 @@ int use_major = 0;
 
 void *hdr_samples = NULL;
 void *usr_samples = NULL;
+int process_all = 1;      // process all samples in the VCF?
 
 const char *about(void)
 {
@@ -85,7 +86,10 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
         {
             case 'p': new_gt = bcf_gt_phased(0); break;
             case 'm': use_major = 1; break;
-            case 's': samples = optarg; break;
+            case 's':
+                samples = optarg;
+                process_all = 0;
+                break;
             case 'h':
             case '?':
             default: fprintf(stderr,"%s", usage()); exit(1); break;
@@ -94,43 +98,45 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     in_hdr  = in;
     out_hdr = out;
 
-    // load list of samples present in the VCF (specified in the header)
-    hdr_samples = khash_str2int_init();
-    for (i=0; i < bcf_hdr_nsamples(in_hdr); i++) {
-        khash_str2int_inc(hdr_samples, bcf_hdr_int2id(in_hdr,BCF_DT_SAMPLE,i));
-    }
-
-    // parse the comma-separated list of samples for processing
-    int user_nsamples;
-    char **user_samples = hts_readlist(samples, 0, &user_nsamples);
-
-    // check if alle the specified samples exist in the VCF header
-    for (i = 0; i < user_nsamples; ++i) {
-        if (!khash_str2int_has_key(hdr_samples, user_samples[i])) {
-            error("One of the samples is not present in the header: %s \n",
-                  user_samples[i]);
+    if (!process_all) {
+        // load list of samples present in the VCF (specified in the header)
+        hdr_samples = khash_str2int_init();
+        for (i=0; i < bcf_hdr_nsamples(in_hdr); i++) {
+            khash_str2int_inc(hdr_samples, bcf_hdr_int2id(in_hdr,BCF_DT_SAMPLE,i));
         }
-    }
 
-    // convert the list of user-specified samples to a hash table
-    usr_samples = khash_str2int_init();
-    for (i=0; i < user_nsamples; i++) {
-        khash_str2int_inc(usr_samples, user_samples[i]);
-    }
+        // parse the comma-separated list of samples for processing
+        int user_nsamples;
+        char **user_samples = hts_readlist(samples, 0, &user_nsamples);
 
-    fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
-    fprintf(stderr, "Samples present in the VCF:\n");
-    for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
-        fprintf(stderr, "%5d %s\n", i, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i));
-    }
+        // check if alle the specified samples exist in the VCF header
+        for (i = 0; i < user_nsamples; ++i) {
+            if (!khash_str2int_has_key(hdr_samples, user_samples[i])) {
+                error("One of the samples is not present in the header: %s \n",
+                      user_samples[i]);
+            }
+        }
 
-    fprintf(stderr, "\nNumber of samples specified by the user: %d\n", user_nsamples);
-    fprintf(stderr, "Samples specified by the user:\n");
-    for (i = 0; i < user_nsamples; i++) {
-        fprintf(stderr, "%5d %s\n", i, user_samples[i]);
-    }
+        // convert the list of user-specified samples to a hash table
+        usr_samples = khash_str2int_init();
+        for (i=0; i < user_nsamples; i++) {
+            khash_str2int_inc(usr_samples, user_samples[i]);
+        }
 
-    free(user_samples);
+        fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
+        fprintf(stderr, "Samples present in the VCF:\n");
+        for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
+            fprintf(stderr, "%5d %s\n", i, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i));
+        }
+
+        fprintf(stderr, "\nNumber of samples specified by the user: %d\n", user_nsamples);
+        fprintf(stderr, "Samples specified by the user:\n");
+        for (i = 0; i < user_nsamples; i++) {
+            fprintf(stderr, "%5d %s\n", i, user_samples[i]);
+        }
+
+        free(user_samples);
+    }
 
     return 0;
 }
@@ -172,10 +178,12 @@ bcf1_t *process(bcf1_t *rec)
     // replace gts
     for (i=0; i<ngts; i++)
     {
-        char *s = bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i / 2);
-//        fprintf(stderr, "%d/%s/%d ", i / 2, s, khash_str2int_has_key(usr_samples, s));
-//        fprintf(stderr, "%d ", gts[i]);
-        if ( gts[i]==bcf_gt_missing && khash_str2int_has_key(usr_samples, s))
+        // process the i-th sample if:
+        //    a) all samples in the VCF are to be processed
+        //    b) this sample has been specified by the user
+        int process_sample = process_all ? 1 : khash_str2int_has_key(usr_samples, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i / 2));
+
+        if ( gts[i]==bcf_gt_missing && process_sample)
         {
             gts[i] = new_gt;
             changed++;
