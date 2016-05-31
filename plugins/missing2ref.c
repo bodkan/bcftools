@@ -42,6 +42,8 @@ void *hdr_samples = NULL;
 void *usr_samples = NULL;
 int process_all = 1;      // process all samples in the VCF?
 
+int *samples_mask = NULL;
+
 const char *about(void)
 {
     return "Set missing genotypes (\"./.\") to ref or major allele (\"0/0\" or \"0|0\").\n";
@@ -98,7 +100,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     in_hdr  = in;
     out_hdr = out;
 
-    if (!process_all) {
+    // create a binary mask of sample names:
+    //     0 - sample will NOT be processed
+    //     1 - sample will be processed
+    samples_mask = malloc (sizeof (int) * bcf_hdr_nsamples(in_hdr));
+
+    if (process_all) {
+        for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++)
+            samples_mask[i] = 1;
+    } else {
         // load list of samples present in the VCF (specified in the header)
         hdr_samples = khash_str2int_init();
         for (i=0; i < bcf_hdr_nsamples(in_hdr); i++) {
@@ -121,6 +131,13 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
         usr_samples = khash_str2int_init();
         for (i=0; i < user_nsamples; i++) {
             khash_str2int_inc(usr_samples, user_samples[i]);
+        }
+
+        // assign 0 to samples that were not specified by the user
+        samples_mask = malloc (sizeof (int) * bcf_hdr_nsamples(in_hdr));
+        for (i = 0; i < bcf_hdr_nsamples(in_hdr); i++) {
+            char *s = bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE,i);
+            samples_mask[i] = khash_str2int_has_key(usr_samples, s);
         }
 
         fprintf(stderr, "Number of samples in the VCF: %d\n",  bcf_hdr_nsamples(in_hdr));
@@ -178,12 +195,7 @@ bcf1_t *process(bcf1_t *rec)
     // replace gts
     for (i=0; i<ngts; i++)
     {
-        // process the i-th sample if:
-        //    a) all samples in the VCF are to be processed
-        //    b) this sample has been specified by the user
-        int process_sample = process_all ? 1 : khash_str2int_has_key(usr_samples, bcf_hdr_int2id(in_hdr, BCF_DT_SAMPLE, i / 2));
-
-        if ( gts[i]==bcf_gt_missing && process_sample)
+        if ( gts[i]==bcf_gt_missing && samples_mask[i / 2])
         {
             gts[i] = new_gt;
             changed++;
