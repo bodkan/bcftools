@@ -115,10 +115,6 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
         int nsamples;
         char **samples = hts_readlist(exclude ? &samples_str[1] : samples_str, 0, &nsamples);
 
-        for (i = 0; i < nsamples; i++) {
-            fprintf(stderr, "%s\n", samples[i]);
-        }
-
         // check if all of the specified samples exist in the VCF header
         for (i = 0; i < nsamples; ++i) {
             if (bcf_hdr_id2int(in_hdr, BCF_DT_SAMPLE, samples[i]) == -1) {
